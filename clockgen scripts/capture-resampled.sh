@@ -140,7 +140,7 @@ function do_capture
 	local alsa_sample_rate=46875 # 48000 is possible but has reduced quality
 	local file_rf_video="$output_dir/$date_iso_now-rf-video-40msps.u8"
 	local file_rf_audio="$output_dir/$date_iso_now-rf-audio-10msps.u8"
-	local file_linear_audio="$output_dir/$date_iso_now-linear-audio-${alsa_sample_rate}sps-3ch-24bit-le.wav"
+	local file_baseband_audio="$output_dir/$date_iso_now-baseband-audio-${alsa_sample_rate}sps-3ch-24bit-le.wav"
 
 	pid_0=0
 	pid_1=0
@@ -158,9 +158,9 @@ function do_capture
 	
 	local alsa_period=12000           # about 250ms / 4-times per sec.
 	local alsa_buffer=$((48000 * 5))  # about 5 seconds of ALSA buffer
-	arecord -D $CLOCK_GEN_ALSA_DEVICE -c 3 -r $alsa_sample_rate -f S24_3LE --period-size=$alsa_period --buffer-size=$alsa_buffer "$file_linear_audio" 2>&1 | grep -v "Aborted by signal Interrupt" &
+	arecord -D $CLOCK_GEN_ALSA_DEVICE -c 3 -r $alsa_sample_rate -f S24_3LE --period-size=$alsa_period --buffer-size=$alsa_buffer "$file_baseband_audio" 2>&1 | grep -v "Aborted by signal Interrupt" &
 	pid_2=$!
-	echo "Capturing to '$file_linear_audio'"
+	echo "Capturing to '$file_baseband_audio'"
 	
 	wait_for_ctrl_c
 
@@ -192,12 +192,13 @@ function usage
 
 	echo "A script to capture 3 streams of VHS in sync"
 	echo "Copyright (c) Rene Wolf"
+        echo "Copyright (c) Harry Munday"
 	echo ""
 	echo "Expects to have a $url installed, and ready as '$CLOCK_GEN_ALSA_DEVICE'"
 	echo ""
 	echo "Usage:"
 	echo "./$MY_NAME /media/lots-of-space/1984-oceania-holiday-tape"
-	echo "   Will record RF streams from 2 CX cards and a 3ch wav from linear audio."
+	echo "   Will record RF streams from 2 CX cards and a 3ch wav from baseband audio input on PCM1802 module."
 	echo "   All stored as individual files into the given directory."
 	echo ""
 	echo "For more details, see $url"
