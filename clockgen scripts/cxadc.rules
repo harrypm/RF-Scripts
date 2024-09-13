@@ -1,0 +1,22 @@
+KERNEL=="cxadc*", GROUP="video"
+
+# Rule for just cxadc0 to select vmux 0
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/vmux}="1"
+# Rule for just cxadc1 to select vmux 1
+KERNEL=="cxadc1", SUBSYSTEM=="cxadc", ATTR{device/parameters/vmux}="1"
+# Rule for just cxadc0 crystal
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/crystal}="40000000"
+# Rule for just cxadc1 crystal
+KERNEL=="cxadc1", SUBSYSTEM=="cxadc", ATTR{device/parameters/crystal}="40000000"
+# Rule for just cxadc0 to select center_offset
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/center_offset}="1"
+# Rule for just cxadc1 to select center_offset
+KERNEL=="cxadc1", SUBSYSTEM=="cxadc", ATTR{device/parameters/center_offset}="1"
+# Rule for just cxadc0 to select gain level
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/level}="0"
+# Rule for just cxadc1 to select gain level
+KERNEL=="cxadc1", SUBSYSTEM=="cxadc", ATTR{device/parameters/level}="0"
+# Rule for just cxadc0 to select six db gain
+KERNEL=="cxadc0", SUBSYSTEM=="cxadc", ATTR{device/parameters/sixdb}="0"
+# Rule for just cxadc1 to select six db gain
+KERNEL=="cxadc1", SUBSYSTEM=="cxadc", ATTR{device/parameters/sixdb}="0"
