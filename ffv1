@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# Check if input file is provided
+if [ -z "$1" ]; then
+  echo "Usage: $0 <input_file>"
+  exit 1
+fi
+
+INPUT="$1"
+OUTPUT="${INPUT%.*}.mkv"
+
+# Detect field order (top or bottom) with ffprobe
+FIELD_ORDER=$(ffprobe -v error -select_streams v:0 -show_entries stream=field_order -of default=noprint_wrappers=1:nokey=1 "$INPUT")
+
+# Set the appropriate setfield filter based on field order
+if [ "$FIELD_ORDER" == "tt" ]; then
+  SETFIELD_FILTER="setfield=tff"
+elif [ "$FIELD_ORDER" == "bb" ]; then
+  SETFIELD_FILTER="setfield=bff"
+else
+  echo "Field order not detected. Defaulting to top-field-first (TFF)."
+  SETFIELD_FILTER="setfield=tff"
+fi
+
+# Detect format (NTSC or PAL) based on frame rate
+FRAME_RATE=$(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 "$INPUT" | bc)
+if (( $(echo "$FRAME_RATE == 29.97 || $FRAME_RATE == 59.94" | bc -l) )); then
+  FORMAT="NTSC"
+elif (( $(echo "$FRAME_RATE == 25" | bc -l) )); then
+  FORMAT="PAL"
+else
+  echo "Unable to determine format. Exiting."
+  exit 1
+fi
+
+# Apply FFV1 compression with dynamic setfield filter
+if [ "$FORMAT" == "NTSC" ]; then
+  ffmpeg -i "$INPUT" -c:v ffv1 -coder 1 -context 1 -g 1 -level 3 -slices 16 -slicecrc 1 \
+    -vf "$SETFIELD_FILTER" -flags +ilme+ildct -pixel_format yuv422p -color_range tv \
+    -color_primaries smpte170m -color_trc bt709 -colorspace smpte170m \
+    -shortest -c:a pcm_s24le -y "$OUTPUT"
+elif [ "$FORMAT" == "PAL" ]; then
+  ffmpeg -i "$INPUT" -c:v ffv1 -coder 1 -context 1 -g 1 -level 3 -slices 16 -slicecrc 1 \
+    -vf "$SETFIELD_FILTER" -flags +ilme+ildct -aspect 4:3 -pixel_format yuv422p -color_range tv \
+    -color_primaries bt470bg -color_trc bt709 -colorspace bt470bg \
+    -shortest -c:a pcm_s24le -y "$OUTPUT"
+fi
+
+echo "Processing complete. Output file: $OUTPUT"
+

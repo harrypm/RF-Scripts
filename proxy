@@ -1,0 +1,147 @@
+#!/bin/bash
+
+# Check if input file is provided
+if [ -z "$1" ]; then
+    echo "Please provide an input file."
+    exit 1
+fi
+
+INPUT_FILE="$1"
+FILENAME="${INPUT_FILE%.*}"
+OUTPUT_FILE="${FILENAME}_Proxy.mp4"
+
+# Prompt for audio codec
+read -p "Choose audio codec (aac or opus): " AUDIO_CODEC
+if [ "$AUDIO_CODEC" == "opus" ]; then
+    AUDIO_CODEC="libopus"
+else
+    AUDIO_CODEC="aac"
+fi
+
+# Prompt for video codec
+read -p "Choose video codec (avc (default), hevc, or av1): " VIDEO_CODEC
+if [ "$VIDEO_CODEC" == "hevc" ]; then
+    VIDEO_CODEC="libx265"
+elif [ "$VIDEO_CODEC" == "av1" ]; then
+    VIDEO_CODEC="libaom-av1"
+else
+    VIDEO_CODEC="libx264"
+fi
+
+# Prompt for 2-pass encoding
+read -p "Use 2-pass encoding? (yes or no): " TWOPASS
+if [ "$TWOPASS" == "yes" ]; then
+    TWOPASS_OPTION=1
+else
+    TWOPASS_OPTION=0
+fi
+
+# Prompt for GPU acceleration
+read -p "Use GPU acceleration? (yes or no): " GPU_ACCEL
+if [ "$GPU_ACCEL" == "yes" ]; then
+    GPU_ACCEL_OPTION=1
+else
+    GPU_ACCEL_OPTION=0
+fi
+
+# Check if ffmpeg is installed
+if ! command -v ffmpeg &> /dev/null; then
+    echo "ffmpeg is not installed or not in your PATH."
+    exit 1
+fi
+
+# Detect video resolution and metadata
+RESOLUTION=$(ffmpeg -i "$INPUT_FILE" 2>&1 | grep Stream | grep Video: | grep -oE '[0-9]{3,}x[0-9]{3,}')
+FRAME_RATE=$(ffmpeg -i "$INPUT_FILE" 2>&1 | grep Stream | grep Video: | grep -oP '[0-9]{2}(?=\sfps)')
+COLOR_METADATA=$(ffmpeg -i "$INPUT_FILE" 2>&1 | grep Video: | grep -oE 'bt470bg|smpte170m')
+
+# Set defaults
+STANDARD=""
+COLOR_PRIMARIES=""
+COLORSPACE=""
+COLOR_MATRIX=""
+COLOR_TRC=""
+FILTER_CHAIN=""
+
+if [[ "$RESOLUTION" =~ ^720x576|936x576|928x576$ ]] && [[ "$FRAME_RATE" == "25" ]] && [[ "$COLOR_METADATA" =~ bt470bg ]]; then
+    STANDARD="PAL"
+    COLOR_PRIMARIES="bt470bg"
+    COLORSPACE="bt470bg"
+    COLOR_MATRIX="bt470bg"
+    COLOR_TRC="bt709"
+    FILTER_CHAIN="bwdif,scale=720:576,fps=25,format=yuv420p"
+elif [[ "$RESOLUTION" =~ ^720x480|760x488|1135x624$ ]] && [[ "$FRAME_RATE" == "29.97" ]] && [[ "$COLOR_METADATA" =~ smpte170m ]]; then
+    STANDARD="NTSC"
+    COLOR_PRIMARIES="smpte170m"
+    COLORSPACE="smpte170m"
+    COLOR_MATRIX="smpte170m"
+    COLOR_TRC="bt709"
+    FILTER_CHAIN="bwdif,scale=720:486,fps=29.97,format=yuv420p"
+elif [[ "$RESOLUTION" == "760x512" ]]; then
+    STANDARD="IMX VBI NTSC"
+    FILTER_CHAIN="scale=720:512,fps=${FRAME_RATE},format=yuv420p"
+elif [[ "$RESOLUTION" == "928x608" ]]; then
+    STANDARD="IMX VBI PAL"
+    FILTER_CHAIN="scale=720:608,fps=${FRAME_RATE},format=yuv420p"
+elif [[ "$RESOLUTION" == "1135x624" ]]; then
+    STANDARD="Full 4fsc"
+    FILTER_CHAIN="scale=$RESOLUTION,fps=$FRAME_RATE,format=yuv420p"
+else
+    echo "Unrecognized video standard. Defaulting to NTSC settings."
+    STANDARD="NTSC"
+    COLOR_PRIMARIES="smpte170m"
+    COLORSPACE="smpte170m"
+    COLOR_MATRIX="smpte170m"
+    COLOR_TRC="bt709"
+    FILTER_CHAIN="bwdif,scale=720:486,fps=29.97,format=yuv420p"
+fi
+
+echo "Detected Standard: $STANDARD"
+echo "Color Primaries: $COLOR_PRIMARIES"
+echo "Color Space: $COLORSPACE"
+echo "Color Matrix Coefficients: $COLOR_MATRIX"
+echo "Transfer Characteristics: $COLOR_TRC"
+
+# Check for GPU support if enabled
+ENCODER_OPTIONS="-c:v ${VIDEO_CODEC} -b:v 8000k -threads 8"
+if [[ "$GPU_ACCEL_OPTION" -eq 1 ]]; then
+    if [[ "$VIDEO_CODEC" == "libx264" ]] && ffmpeg -hide_banner -encoders | grep -q "h264_nvenc"; then
+        ENCODER_OPTIONS="-c:v h264_nvenc -b:v 8000k -preset slow"
+    elif [[ "$VIDEO_CODEC" == "libx265" ]] && ffmpeg -hide_banner -encoders | grep -q "hevc_nvenc"; then
+        ENCODER_OPTIONS="-c:v hevc_nvenc -b:v 8000k -preset slow"
+    fi
+fi
+
+# Apply color options for non-GPU encoders
+if [[ "$GPU_ACCEL_OPTION" -eq 0 ]]; then
+    ENCODER_OPTIONS="${ENCODER_OPTIONS} -color_range tv -color_primaries ${COLOR_PRIMARIES} -colorspace ${COLORSPACE} -color_trc ${COLOR_TRC}"
+fi
+
+# Perform encoding
+if [[ "$TWOPASS_OPTION" -eq 1 ]]; then
+    echo "Starting first pass..."
+    ffmpeg -y -i "$INPUT_FILE" -vf "$FILTER_CHAIN" $ENCODER_OPTIONS -pass 1 -passlogfile "$FILENAME" -f null /dev/null
+    if [[ $? -ne 0 ]]; then
+        echo "First pass encoding failed."
+        exit 1
+    fi
+
+    echo "Starting second pass..."
+    ffmpeg -y -i "$INPUT_FILE" -vf "$FILTER_CHAIN" $ENCODER_OPTIONS -pass 2 -passlogfile "$FILENAME" -movflags +faststart -c:a $AUDIO_CODEC -b:a 320k "$OUTPUT_FILE"
+    if [[ $? -ne 0 ]]; then
+        echo "Second pass encoding failed."
+        exit 1
+    fi
+
+    # Clean up pass log files
+    rm -f "$FILENAME-0.log" "$FILENAME-0.log.mbtree"
+else
+    ffmpeg -y -i "$INPUT_FILE" -vf "$FILTER_CHAIN" $ENCODER_OPTIONS -movflags +faststart -c:a $AUDIO_CODEC -b:a 320k "$OUTPUT_FILE"
+    if [[ $? -ne 0 ]]; then
+        echo "Encoding failed."
+        exit 1
+    fi
+fi
+
+echo "Encoding successful."
+
