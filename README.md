@@ -1,9 +1,11 @@
 # RF Scripts
 
+
 Scripts repository for use with the [decode projects](https://github.com/oyvindln/vhs-decode/wiki).
 
 
 # Clockgen Scripts
+
 
 - Direct
 
@@ -16,3 +18,17 @@ This script was the orginal script, now its a go to for higher end systems that 
 - SoX Benchmark
 
 This script simply benchmarks your CPUs proformace abbility with SoX usefull to find out if somthing is very wrong or yours systems abbilitys.
+
+
+# Auto Audio Align
+
+- aligin
+
+This script is ment for easy global use of 48kh and 46khz files from HiFi-Decode / Baseband capture from MISRC/Clockgen Mod. will take .JSON decode data and or .wav/.flac audio files either first or last.
+
+
+# Proxy
+
+- proxy
+
+This script is a master proxy genaration script, AVC stock config is Youtube supported and Odysee ready, also has OPUS/HEVC, uses web-ready MP4.
