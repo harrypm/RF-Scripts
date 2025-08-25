@@ -22,9 +22,16 @@ This script simply benchmarks your CPUs proformace abbility with SoX usefull to 
 
 # Auto Audio Align
 
-- aligin
+- align
 
-This script is ment for easy global use of 48kh and 46khz files from HiFi-Decode / Baseband capture from MISRC/Clockgen Mod. will take .JSON decode data and or .wav/.flac audio files either first or last.
+This script is ment for easy global use of 48kh and 46khz files from HiFi-Decode / Baseband capture from MISRC/Clockgen Mod. 
+
+This will take .JSON decode data and or .wav/.flac audio files either first or last.
+
+
+# FFV1
+
+This script is ment for processing legacy uncompressed V210 mov or avi captures, this was used for BMD Media Express captures transcodes before moving to Vrecord, FFV1 + AVC proxy direct capture for inital runs.
 
 
 # Proxy
