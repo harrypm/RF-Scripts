@@ -26,12 +26,17 @@ This script simply benchmarks your CPUs proformace abbility with SoX usefull to 
 
 This script is ment for easy global use of 48kh and 46khz files from HiFi-Decode / Baseband capture from MISRC/Clockgen Mod. 
 
-This will take .JSON decode data and or .wav/.flac audio files either first or last.
+This will take .JSON decode data and or .wav/.flac audio files either first or last, and will assume Video RF rate based off a simllaer or same name local file in the directory.
 
 
 # FFV1
 
 This script is ment for processing legacy uncompressed V210 mov or avi captures, this was used for BMD Media Express captures transcodes before moving to Vrecord, FFV1 + AVC proxy direct capture for inital runs.
+
+
+# Fix Decode JSON
+
+This script is ment for fixing JSON files with incorrect or wacky bSNR values or "black signal to noise ratio" when decode genrates an out of real world number drastically above the media's actual bSNR vlaue, this is very useful for when the JSON is being read inside of ld-analyse to view in graphing form and would be redering off screen outherwise.
 
 
 # Proxy
