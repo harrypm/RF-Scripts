@@ -1,0 +1,371 @@
+#!/bin/bash
+
+# Script to fix outlier bPSNR values in vhs-decode JSON files
+# Processes JSON files produced by vhs-decode (all tape formats)
+# Maximum bPSNR ceiling: 70dB
+
+process_json_file() {
+    local file="$1"
+    local basename=$(basename "$file" .json)
+    local dirname=$(dirname "$file")
+    local output_file="${dirname}/${basename}-fixed.json"
+    
+    echo "Processing: $file"
+    
+    # Check if this is a vhs-decode file by checking for videoParameters
+    local has_video_params=$(jq -r 'has("videoParameters")' "$file" 2>/dev/null)
+    
+    if [[ "$has_video_params" != "true" ]]; then
+        echo "  Skipping: Not a vhs-decode JSON file"
+        return
+    fi
+    
+    local system=$(jq -r '.videoParameters.system // "unknown"' "$file" 2>/dev/null)
+    local tape_format=$(jq -r '.videoParameters.tapeFormat // "unknown"' "$file" 2>/dev/null)
+    echo "  vhs-decode file detected (system: $system, format: $tape_format)"
+    
+    # Check if we have fields array with vitsMetrics
+    local has_fields=$(jq -r 'has("fields") and (.fields | type == "array")' "$file" 2>/dev/null)
+    
+    if [[ "$has_fields" != "true" ]]; then
+        echo "  Skipping: No fields array found"
+        return
+    fi
+    
+    # Get all bPSNR values and their indices
+    local bpsnr_data=$(jq -r '
+        .fields | to_entries | 
+        map(select(.value | type == "object" and has("vitsMetrics") and (.vitsMetrics | type == "object" and has("bPSNR") and (.bPSNR | type == "number")))) |
+        map("\(.key),\(.value.vitsMetrics.bPSNR)")
+        []' "$file" 2>/dev/null)
+    
+    if [[ -z "$bpsnr_data" ]]; then
+        echo "  No bPSNR values found"
+        return
+    fi
+    
+    # Process the data and identify outliers
+    local temp_file=$(mktemp)
+    local changes_made=false
+    
+    # Copy original file to temp
+    cp "$file" "$temp_file"
+    
+    # Read bPSNR values into arrays
+    local indices=()
+    local values=()
+    
+    while IFS=',' read -r index value; do
+        indices+=("$index")
+        values+=("$value")
+    done <<< "$bpsnr_data"
+    
+    echo "  Found ${#values[@]} bPSNR values"
+    
+    # Process each value
+    for i in "${!values[@]}"; do
+        local current_value=${values[$i]}
+        local current_index=${indices[$i]}
+        
+        # Check if value is above 50 or exceeds 70dB ceiling
+        if (( $(echo "$current_value > 70" | bc -l) )); then
+            echo "    Value exceeds 70dB ceiling: $current_value at index $current_index"
+            
+            # Replace with previous value (enforce 70dB ceiling)
+            if [[ $i -gt 0 ]]; then
+                local replacement_value=${values[$((i-1))]}
+                echo "      Replacing with previous value: $replacement_value"
+                
+                # Update the JSON file
+                jq ".fields[$current_index].vitsMetrics.bPSNR = $replacement_value" "$temp_file" > "${temp_file}.tmp" && mv "${temp_file}.tmp" "$temp_file"
+                
+                changes_made=true
+            else
+                echo "      First value, cannot replace"
+            fi
+        elif (( $(echo "$current_value > 50" | bc -l) )); then
+            echo "    Checking high bPSNR value: $current_value at index $current_index"
+            
+            # Calculate average of previous up to 10 values
+            local start_idx=$((i - 10))
+            if [[ $start_idx -lt 0 ]]; then
+                start_idx=0
+            fi
+            
+            if [[ $i -gt 0 ]]; then
+                local sum=0
+                local count=0
+                
+                for j in $(seq $start_idx $((i-1))); do
+                    sum=$(echo "$sum + ${values[$j]}" | bc -l)
+                    count=$((count + 1))
+                done
+                
+                if [[ $count -gt 0 ]]; then
+                    local avg=$(echo "scale=6; $sum / $count" | bc -l)
+                    local diff=$(echo "scale=6; $current_value - $avg" | bc -l | sed 's/^-//')
+                    
+                    # Check if difference is more than 3
+                    if (( $(echo "$diff > 3" | bc -l) )); then
+                        echo "      Outlier detected! Value: $current_value, Average: $avg, Diff: $diff"
+                        
+                        # Replace with previous value
+                        local replacement_value=${values[$((i-1))]}
+                        echo "      Replacing with previous value: $replacement_value"
+                        
+                        # Update the JSON file
+                        jq ".fields[$current_index].vitsMetrics.bPSNR = $replacement_value" "$temp_file" > "${temp_file}.tmp" && mv "${temp_file}.tmp" "$temp_file"
+                        
+                        changes_made=true
+                    else
+                        echo "      Value within acceptable range (diff: $diff)"
+                    fi
+                fi
+            else
+                echo "      First value, cannot compare to previous values"
+            fi
+        fi
+    done
+    
+    if [[ "$changes_made" == "true" ]]; then
+        mv "$temp_file" "$output_file"
+        echo "  Fixed file saved as: $output_file"
+    else
+        rm "$temp_file"
+        echo "  No changes needed"
+    fi
+}
+
+# Main script
+if [[ $# -eq 0 ]]; then
+    echo "Usage: $0 <directory_or_file> [directory_or_file...]"
+    echo "Processes JSON files to fix outlier bPSNR values in vhs-decode files (all formats)"
+    echo "Maximum bPSNR ceiling: 70dB"
+    exit 1
+fi
+
+# Check if jq is available
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed"
+    exit 1
+fi
+
+# Check if bc is available
+if ! command -v bc &> /dev/null; then
+    echo "Error: bc is required but not installed"
+    exit 1
+fi
+
+for target in "$@"; do
+    if [[ -f "$target" ]]; then
+        # Single file
+        if [[ "$target" == *.json ]]; then
+            process_json_file "$target"
+        else
+            echo "Skipping non-JSON file: $target"
+        fi
+    elif [[ -d "$target" ]]; then
+        # Directory - find all JSON files
+        echo "Searching for JSON files in: $target"
+        find "$target" -name "*.json" -type f | while read -r json_file; do
+            process_json_file "$json_file"
+        done
+    else
+        echo "Error: $target is not a valid file or directory"
+    fi
+done
+
+echo "Processing complete"
+
+#!/bin/bash
+
+# vhs-decode JSON fixer script
+# Processes JSON files to fix bPSNR values above 50 that are outliers
+# Also enforces 70dB maximum ceiling for all values
+# Works with all tape formats
+
+# Check if jq is installed
+if ! command -v jq &> /dev/null; then
+    echo "Error: jq is required but not installed. Please install jq first."
+    echo "On Linux Mint/Ubuntu: sudo apt install jq"
+    exit 1
+fi
+
+# Function to check if a value is within ±3 of the average of last 10 values
+check_outlier() {
+    local current_value="$1"
+    local previous_values="$2"
+    
+    # Get last 10 values (or fewer if not enough data)
+    local last_values=$(echo "$previous_values" | tail -n 10)
+    local count=$(echo "$last_values" | wc -l)
+    
+    # Need at least 3 previous values to make a decision
+    if [ "$count" -lt 3 ]; then
+        echo "false"
+        return
+    fi
+    
+    # Calculate average of last values
+    local sum=0
+    local num_count=0
+    while IFS= read -r value; do
+        if [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            sum=$(echo "$sum + $value" | bc -l)
+            ((num_count++))
+        fi
+    done <<< "$last_values"
+    
+    if [ "$num_count" -eq 0 ]; then
+        echo "false"
+        return
+    fi
+    
+    local avg=$(echo "scale=2; $sum / $num_count" | bc -l)
+    local diff=$(echo "scale=2; $current_value - $avg" | bc -l | sed 's/^-//')
+    
+    # Check if difference is within ±3
+    if (( $(echo "$diff <= 3" | bc -l) )); then
+        echo "false"  # Not an outlier
+    else
+        echo "true"   # Is an outlier
+    fi
+}
+
+# Function to process a single JSON file
+process_json_file() {
+    local input_file="$1"
+    local output_file="${input_file%.json}-fixed.json"
+    
+    echo "Processing: $input_file"
+    
+    # Check if it's a vhs-decode file
+    local has_video_params=$(jq -r 'has("videoParameters")' "$input_file" 2>/dev/null)
+    if [[ "$has_video_params" != "true" ]]; then
+        echo "  Skipping: Not a vhs-decode JSON file"
+        return
+    fi
+    
+    local system=$(jq -r '.videoParameters.system // "unknown"' "$input_file" 2>/dev/null)
+    local tape_format=$(jq -r '.videoParameters.tapeFormat // "unknown"' "$input_file" 2>/dev/null)
+    echo "  vhs-decode file detected (system: $system, format: $tape_format)"
+    
+    # Extract bPSNR values from fields array
+    local bpsnr_values=$(jq -r '.fields[] | select(.vitsMetrics and (.vitsMetrics | type == "object") and .vitsMetrics.bPSNR) | .vitsMetrics.bPSNR' "$input_file" 2>/dev/null)
+    
+    if [ -z "$bpsnr_values" ]; then
+        echo "  No bPSNR values found"
+        return
+    fi
+    
+    # Create a temporary file for processing
+    local temp_file=$(mktemp)
+    cp "$input_file" "$temp_file"
+    
+    # Get field indices that have bPSNR values
+    local field_indices=$(jq -r '.fields | to_entries | .[] | select(.value.vitsMetrics and (.value.vitsMetrics | type == "object") and .value.vitsMetrics.bPSNR) | .key' "$input_file" 2>/dev/null)
+    
+    # Convert bPSNR values to array for processing
+    local bpsnr_array=()
+    local index_array=()
+    while IFS= read -r value; do
+        bpsnr_array+=("$value")
+    done <<< "$bpsnr_values"
+    
+    while IFS= read -r index; do
+        index_array+=("$index")
+    done <<< "$field_indices"
+    
+    local changes_made=false
+    local previous_values=""
+    
+    # Process each bPSNR value
+    for i in "${!bpsnr_array[@]}"; do
+        local current_value="${bpsnr_array[i]}"
+        local field_index="${index_array[i]}"
+        
+        # Check if current value exceeds 70dB ceiling
+        if (( $(echo "$current_value > 70" | bc -l) )); then
+            # Enforce 70dB ceiling
+            local previous_value=$(echo "$previous_values" | tail -n 1)
+            
+            if [ -n "$previous_value" ]; then
+                echo "    Fixing bPSNR[field $field_index]: $current_value -> $previous_value (exceeds 70dB ceiling)"
+                
+                # Update the JSON file
+                jq ".fields[$field_index].vitsMetrics.bPSNR = $previous_value" "$temp_file" > "${temp_file}.tmp" && mv "${temp_file}.tmp" "$temp_file"
+                
+                changes_made=true
+                # Add the corrected value to our tracking
+                previous_values+="$previous_value\n"
+            else
+                # No previous value available, keep current and add to tracking
+                previous_values+="$current_value\n"
+            fi
+        # Check if current value is above 50
+        elif (( $(echo "$current_value > 50" | bc -l) )); then
+            # Check if it's an outlier
+            if [ "$(check_outlier "$current_value" "$previous_values")" = "true" ]; then
+                # Get the previous value (last in our list)
+                local previous_value=$(echo "$previous_values" | tail -n 1)
+                
+                if [ -n "$previous_value" ]; then
+                    echo "    Fixing bPSNR[field $field_index]: $current_value -> $previous_value (outlier above 50)"
+                    
+                    # Update the JSON file
+                    jq ".fields[$field_index].vitsMetrics.bPSNR = $previous_value" "$temp_file" > "${temp_file}.tmp" && mv "${temp_file}.tmp" "$temp_file"
+                    
+                    changes_made=true
+                    # Add the corrected value to our tracking
+                    previous_values+="$previous_value\n"
+                else
+                    # No previous value available, keep current and add to tracking
+                    previous_values+="$current_value\n"
+                fi
+            else
+                # Not an outlier, add to tracking
+                previous_values+="$current_value\n"
+            fi
+        else
+            # Value is 50 or below, add to tracking
+            previous_values+="$current_value\n"
+        fi
+    done
+    
+    if [ "$changes_made" = true ]; then
+        mv "$temp_file" "$output_file"
+        echo "  Fixed file saved as: $output_file"
+    else
+        rm "$temp_file"
+        echo "  No changes needed"
+    fi
+}
+
+# Main script
+echo "vhs-decode JSON Fixer"
+echo "====================="
+echo "Max bPSNR ceiling: 70dB"
+
+# Check if directory argument is provided
+if [ $# -eq 0 ]; then
+    search_dir="."
+else
+    search_dir="$1"
+fi
+
+if [ ! -d "$search_dir" ]; then
+    echo "Error: Directory '$search_dir' does not exist"
+    exit 1
+fi
+
+echo "Searching for JSON files in: $search_dir"
+echo ""
+
+# Find and process JSON files
+find "$search_dir" -name "*.json" -type f | while read -r json_file; do
+    process_json_file "$json_file"
+done
+
+echo ""
+echo "Processing complete!"
+
